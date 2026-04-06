@@ -33,8 +33,8 @@ def init_db():
     conn.commit(); conn.close()
 init_db()
 
-# --- HÀM PHÁT ÂM CHUẨN CHO IPHONE ---
-def render_audio(text, auto_play_on_desktop=True):
+# --- HÀM PHÁT ÂM CHUẨN CHO IPHONE (Đã sửa lỗi TypeError) ---
+def render_audio(text, autoplay=False):
     tts = gTTS(text=text, lang='ja')
     fp = BytesIO()
     tts.write_to_fp(fp)
@@ -50,7 +50,7 @@ def render_audio(text, auto_play_on_desktop=True):
             🔊 BẤM ĐỂ NGHE
         </button>
         <script>
-            if("{str(auto_play_on_desktop).lower()}" === "true") {{
+            if("{str(autoplay).lower()}" === "true") {{
                 document.getElementById('audio_{uid}').play().catch(e => console.log('Chờ người dùng bấm (iOS)'));
             }}
         </script>
@@ -287,7 +287,7 @@ with t_quiz:
             q_word = st.session_state.quiz_word
             st.markdown(f"<div class='word-card'><h1 style='font-size: 60px;'>{q_word[1]}</h1></div>", unsafe_allow_html=True)
             
-            # Cung cấp nút phát âm chống lỗi Safari
+            # Hàm gọi nút phát âm với tên biến đã được đồng bộ
             render_audio(q_word[1], autoplay=True)
             
             st.write("Chọn đáp án đúng:")
