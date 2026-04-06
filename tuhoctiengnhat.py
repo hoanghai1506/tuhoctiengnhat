@@ -8,9 +8,10 @@ from deep_translator import GoogleTranslator
 from io import BytesIO
 import base64
 import json
+import uuid
 import streamlit.components.v1 as components
 
-# Khởi tạo bộ chuyển đổi tiếng Nhật
+# Khởi tạo bộ chuyển đổi
 kks = pykakasi.kakasi()
 
 # --- CẤU HÌNH GIAO DIỆN ---
@@ -19,8 +20,6 @@ st.markdown("""
     <style>
     .stApp { background-color: #FFF0F5; }
     h1, h2, h3 { color: #FF69B4; font-family: 'Arial', sans-serif; text-align: center;}
-    .stButton>button { background-color: #FF69B4; color: white; border-radius: 10px; border: none; font-weight: bold; }
-    .stButton>button:hover { background-color: #FF1493; }
     .word-card { background-color: white; padding: 30px; border-radius: 20px; box-shadow: 0px 4px 15px rgba(0,0,0,0.1); text-align: center; margin-bottom: 20px;}
     </style>
 """, unsafe_allow_html=True)
@@ -34,19 +33,30 @@ def init_db():
     conn.commit(); conn.close()
 init_db()
 
-# --- HÀM PHÁT ÂM CƠ BẢN ---
-def render_audio(text, autoplay=False):
+# --- HÀM PHÁT ÂM CHUẨN CHO IPHONE ---
+def render_audio(text, auto_play_on_desktop=True):
     tts = gTTS(text=text, lang='ja')
     fp = BytesIO()
     tts.write_to_fp(fp)
     b64 = base64.b64encode(fp.getvalue()).decode()
-    auto_str = "autoplay" if autoplay else ""
+    uid = str(uuid.uuid4()).replace("-", "")
+    
+    # Tạo nút HTML gốc để Safari ghi nhận cú chạm
     html = f"""
-        <audio controls {auto_str} style="width: 100%; height: 45px; border-radius: 10px;">
-            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-        </audio>
+    <div style="text-align: center; margin-top: 10px;">
+        <audio id="audio_{uid}" src="data:audio/mp3;base64,{b64}"></audio>
+        <button onclick="document.getElementById('audio_{uid}').play()" 
+                style="background-color: #FF69B4; color: white; border: none; padding: 12px 30px; border-radius: 50px; font-size: 18px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%;">
+            🔊 BẤM ĐỂ NGHE
+        </button>
+        <script>
+            if("{str(auto_play_on_desktop).lower()}" === "true") {{
+                document.getElementById('audio_{uid}').play().catch(e => console.log('Chờ người dùng bấm (iOS)'));
+            }}
+        </script>
+    </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    components.html(html, height=75)
 
 # --- BỘ NHỚ TRẠNG THÁI ---
 if 'selected_ids' not in st.session_state: st.session_state.selected_ids = []
@@ -55,7 +65,6 @@ if 'quiz_word' not in st.session_state: st.session_state.quiz_word = None
 if 'quiz_options' not in st.session_state: st.session_state.quiz_options = []
 if 'edit_id' not in st.session_state: st.session_state.edit_id = None
 
-# --- TABS ---
 t_add, t_manage, t_shadow, t_flash, t_quiz = st.tabs(["📝 Thêm", "📚 Quản Lý", "🗣 Luyện Nói", "🎴 Flashcard", "🎯 Trắc Nghiệm"])
 
 # ==========================================
@@ -64,14 +73,12 @@ t_add, t_manage, t_shadow, t_flash, t_quiz = st.tabs(["📝 Thêm", "📚 Quản
 with t_add:
     st.markdown("<h3>TRA CỨU VÀ THÊM TỪ</h3>", unsafe_allow_html=True)
     kj_input = st.text_input("Nhập Kanji (vd: 先生):", key="in_kj")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Tra cứu tự động ✧"):
-            if kj_input:
-                st.session_state.temp_hira = "".join([i['hira'] for i in kks.convert(kj_input)])
-                try: st.session_state.temp_mean = GoogleTranslator(source='ja', target='vi').translate(kj_input)
-                except: st.session_state.temp_mean = "Lỗi mạng"
-                st.rerun()
+    if st.button("Tra cứu tự động ✧", use_container_width=True):
+        if kj_input:
+            st.session_state.temp_hira = "".join([i['hira'] for i in kks.convert(kj_input)])
+            try: st.session_state.temp_mean = GoogleTranslator(source='ja', target='vi').translate(kj_input)
+            except: st.session_state.temp_mean = "Lỗi mạng"
+            st.rerun()
 
     h_input = st.text_input("Hiragana:", value=st.session_state.get('temp_hira', ''))
     m_input = st.text_input("Nghĩa tiếng Việt:", value=st.session_state.get('temp_mean', ''))
@@ -97,16 +104,15 @@ with t_manage:
     if not rows: st.info("Hãy thêm từ mới ở tab bên cạnh nhé!")
     
     for r in rows:
-        c1, c2, c3, c4, c5 = st.columns([0.5, 4, 1, 1, 1])
+        c1, c2, c3, c4 = st.columns([0.5, 4, 1.2, 1.2])
         is_checked = c1.checkbox("", key=f"chk_{r[0]}", value=(r[0] in st.session_state.selected_ids))
         if is_checked and r[0] not in st.session_state.selected_ids: st.session_state.selected_ids.append(r[0])
         elif not is_checked and r[0] in st.session_state.selected_ids: st.session_state.selected_ids.remove(r[0])
             
         c2.write(f"**{r[1]}** [{r[2]}] - {r[3]}")
         
-        if c3.button("🔊", key=f"play_{r[0]}"): render_audio(r[1], autoplay=True)
-        if c4.button("Sửa", key=f"edit_{r[0]}"): st.session_state.edit_id = r[0]
-        if c5.button("Xóa", key=f"del_{r[0]}"):
+        if c3.button("Sửa", key=f"edit_{r[0]}"): st.session_state.edit_id = r[0]
+        if c4.button("Xóa", key=f"del_{r[0]}"):
             conn = sqlite3.connect('nihongo_web.db')
             conn.execute("DELETE FROM vocab WHERE id=?", (r[0],))
             conn.commit(); conn.close(); st.rerun()
@@ -121,10 +127,10 @@ with t_manage:
         st.divider()
 
 # ==========================================
-# TAB 3: LUYỆN NÓI (ĐÃ FIX LỖI APPLE & NÚT DỪNG)
+# TAB 3: LUYỆN NÓI (SỬ DỤNG WEB AUDIO API ĐỂ VƯỢT RÀO APPLE)
 # ==========================================
 with t_shadow:
-    st.markdown("<h3>LUYỆN NÓI LIÊN TỤC</h3>", unsafe_allow_html=True)
+    st.markdown("<h3>LUYỆN NÓI (SHADOWING)</h3>", unsafe_allow_html=True)
     if not st.session_state.selected_ids:
         st.warning("Hãy sang tab Quản Lý và chọn ít nhất 1 từ nhé!")
     else:
@@ -148,12 +154,10 @@ with t_shadow:
             <h1 id="p_kanji" style="font-size: 60px; color: #FF69B4; margin-bottom: 10px;">Sẵn sàng!</h1>
             <h3 id="p_hira" style="color: #34495e; margin: 5px 0;"></h3>
             <p id="p_mean" style="color: gray; font-style: italic; font-size: 18px; margin-bottom: 20px;"></p>
-            
-            <audio id="main_audio" style="display:none;"></audio>
 
             <div style="display: flex; justify-content: center; gap: 15px; margin-top: 20px;">
-                <button id="btn_play" onclick="startPlay()" style="background: #27ae60; color: white; border: none; padding: 12px 30px; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; width: 100%;">▶ BẮT ĐẦU PHÁT</button>
-                <button id="btn_stop" onclick="stopPlay()" style="background: #e74c3c; color: white; border: none; padding: 12px 30px; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; width: 100%; display: none;">■ DỪNG LẠI</button>
+                <button id="btn_play" onclick="startPlay()" style="background: #27ae60; color: white; border: none; padding: 15px; border-radius: 10px; font-size: 18px; font-weight: bold; width: 100%;">▶ BẮT ĐẦU</button>
+                <button id="btn_stop" onclick="stopPlay()" style="background: #e74c3c; color: white; border: none; padding: 15px; border-radius: 10px; font-size: 18px; font-weight: bold; width: 100%; display: none;">■ DỪNG LẠI</button>
             </div>
         </div>
         
@@ -161,65 +165,69 @@ with t_shadow:
             const playlist = {js_playlist};
             let idx = 0;
             let isPlaying = false;
-            let timerId = null;
-            const audioEl = document.getElementById('main_audio');
-            
-            function startPlay() {{
-                if(playlist.length === 0 || isPlaying) return;
+            let audioCtx = null;
+            let currentSource = null;
+            let timeoutId = null;
+
+            async function startPlay() {{
+                if(isPlaying) return;
                 isPlaying = true;
                 document.getElementById('btn_play').style.display = 'none';
                 document.getElementById('btn_stop').style.display = 'inline-block';
-                playWord();
+                
+                // Mở khóa AudioContext bằng 1 cú click duy nhất
+                if(!audioCtx) {{
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }}
+                if(audioCtx.state === 'suspended') audioCtx.resume();
+                
+                playLoop();
             }}
 
             function stopPlay() {{
                 isPlaying = false;
-                audioEl.pause();
-                clearTimeout(timerId);
+                if(currentSource) currentSource.stop();
+                clearTimeout(timeoutId);
                 document.getElementById('btn_play').style.display = 'inline-block';
-                document.getElementById('btn_play').innerText = "▶ PHÁT TIẾP";
                 document.getElementById('btn_stop').style.display = 'none';
-                document.getElementById('p_kanji').innerText = "Đã tạm dừng";
+                document.getElementById('btn_play').innerText = "▶ PHÁT TIẾP";
             }}
-            
-            function playWord() {{
+
+            async function playLoop() {{
                 if(!isPlaying) return;
                 if(idx >= playlist.length) {{
                     document.getElementById('p_kanji').innerText = "Hoàn thành! 🌸";
                     document.getElementById('p_hira').innerText = "";
                     document.getElementById('p_mean').innerText = "";
                     stopPlay();
-                    document.getElementById('btn_play').innerText = "▶ PHÁT LẠI TỪ ĐẦU";
+                    document.getElementById('btn_play').innerText = "▶ LẶP LẠI";
                     idx = 0;
                     return;
                 }}
-                
+
                 let word = playlist[idx];
                 document.getElementById('p_kanji').innerText = word.kanji;
                 document.getElementById('p_hira').innerText = word.hira;
                 document.getElementById('p_mean').innerText = word.mean;
-                
-                audioEl.src = "data:audio/mp3;base64," + word.audio;
-                audioEl.load();
-                let playPromise = audioEl.play();
-                
-                if (playPromise !== undefined) {{
-                    playPromise.catch(error => {{
-                        console.log("Audio bị chặn. Tự động chuyển từ sau 3s.");
-                        timerId = setTimeout(() => {{ idx++; playWord(); }}, 3000);
-                    }});
-                }}
-            }}
 
-            // Sự kiện then chốt: Chờ đọc xong mới đếm thời gian nghỉ
-            audioEl.onended = function() {{
-                if(!isPlaying) return;
-                // Nghỉ 3.5 giây để Hải đọc theo (Shadowing)
-                timerId = setTimeout(() => {{
-                    idx++;
-                    playWord();
-                }}, 3500); 
-            }};
+                try {{
+                    let binaryString = window.atob(word.audio);
+                    let len = binaryString.length;
+                    let bytes = new Uint8Array(len);
+                    for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+                    
+                    let audioBuffer = await audioCtx.decodeAudioData(bytes.buffer);
+                    currentSource = audioCtx.createBufferSource();
+                    currentSource.buffer = audioBuffer;
+                    currentSource.connect(audioCtx.destination);
+                    currentSource.start();
+
+                    currentSource.onended = () => {{
+                        if(!isPlaying) return;
+                        timeoutId = setTimeout(() => {{ idx++; playLoop(); }}, 3500);
+                    }};
+                }} catch(e) {{ idx++; playLoop(); }}
+            }}
         </script>
         """
         components.html(html_player, height=350)
@@ -235,19 +243,16 @@ with t_flash:
         if st.button("Rút thẻ mới ➔", use_container_width=True):
             conn = sqlite3.connect('nihongo_web.db')
             ids_str = ','.join(map(str, st.session_state.selected_ids))
-            words = conn.execute(f"SELECT * FROM vocab WHERE id IN ({ids_str})").fetchall()
+            st.session_state.flash_word = random.choice(conn.execute(f"SELECT * FROM vocab WHERE id IN ({ids_str})").fetchall())
             conn.close()
-            st.session_state.flash_word = random.choice(words)
             st.session_state.show_flash_ans = False
 
         if st.session_state.flash_word:
             w = st.session_state.flash_word
             st.markdown(f"<div class='word-card'><h1 style='font-size: 80px;'>{w[1]}</h1></div>", unsafe_allow_html=True)
+            render_audio(w[1], autoplay=True)
             
-            c1, c2 = st.columns(2)
-            if c1.button("🔊 Nghe", use_container_width=True):
-                render_audio(w[1], autoplay=True)
-            if c2.button("👁 Xem nghĩa", use_container_width=True):
+            if st.button("👁 Xem nghĩa", use_container_width=True):
                 st.session_state.show_flash_ans = True
                 
             if st.session_state.get('show_flash_ans', False):
@@ -282,15 +287,14 @@ with t_quiz:
             q_word = st.session_state.quiz_word
             st.markdown(f"<div class='word-card'><h1 style='font-size: 60px;'>{q_word[1]}</h1></div>", unsafe_allow_html=True)
             
+            # Cung cấp nút phát âm chống lỗi Safari
             render_audio(q_word[1], autoplay=True)
             
             st.write("Chọn đáp án đúng:")
             opts = st.session_state.quiz_options
             
-            col1, col2 = st.columns(2)
             for i in range(4):
-                col = col1 if i % 2 == 0 else col2
-                if col.button(opts[i], key=f"ans_{i}", use_container_width=True):
+                if st.button(opts[i], key=f"ans_{i}", use_container_width=True):
                     if opts[i] == q_word[3]:
                         st.balloons()
                         st.success("Chính xác! 🌸")
