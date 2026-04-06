@@ -7,10 +7,10 @@ import pykakasi
 from deep_translator import GoogleTranslator
 from io import BytesIO
 import base64
-import uuid
 import json
 import streamlit.components.v1 as components
 
+# Khởi tạo bộ chuyển đổi tiếng Nhật
 kks = pykakasi.kakasi()
 
 # --- CẤU HÌNH GIAO DIỆN ---
@@ -34,23 +34,18 @@ def init_db():
     conn.commit(); conn.close()
 init_db()
 
-# --- HÀM PHÁT ÂM CHỐNG LỖI TRÙNG LẶP CHO TRẮC NGHIỆM ---
+# --- HÀM PHÁT ÂM CƠ BẢN ---
 def render_audio(text, autoplay=False):
     tts = gTTS(text=text, lang='ja')
     fp = BytesIO()
     tts.write_to_fp(fp)
     b64 = base64.b64encode(fp.getvalue()).decode()
-    uid = str(uuid.uuid4()).replace("-", "") # Tạo ID độc nhất mỗi lần gọi
-    
     auto_str = "autoplay" if autoplay else ""
     html = f"""
-        <audio id="audio_{uid}" controls {auto_str} style="width: 100%; height: 45px; border-radius: 10px;">
+        <audio controls {auto_str} style="width: 100%; height: 45px; border-radius: 10px;">
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
     """
-    if autoplay:
-        # Ép trình duyệt phát bằng Javascript
-        html += f"""<script>document.getElementById("audio_{uid}").play().catch(e => console.log("iOS Autoplay chặn"));</script>"""
     st.markdown(html, unsafe_allow_html=True)
 
 # --- BỘ NHỚ TRẠNG THÁI ---
@@ -94,12 +89,12 @@ with t_add:
 # TAB 2: QUẢN LÝ
 # ==========================================
 with t_manage:
-    st.markdown("<h3>KHO TỪ VỰNG CỦA HẢI</h3>", unsafe_allow_html=True)
+    st.markdown("<h3>KHO TỪ VỰNG</h3>", unsafe_allow_html=True)
     conn = sqlite3.connect('nihongo_web.db')
     rows = conn.execute("SELECT * FROM vocab").fetchall()
     conn.close()
 
-    if not rows: st.info("Hải hãy thêm từ mới ở tab bên cạnh nhé!")
+    if not rows: st.info("Hãy thêm từ mới ở tab bên cạnh nhé!")
     
     for r in rows:
         c1, c2, c3, c4, c5 = st.columns([0.5, 4, 1, 1, 1])
@@ -126,19 +121,18 @@ with t_manage:
         st.divider()
 
 # ==========================================
-# TAB 3: LUYỆN NÓI (GIẢI PHÁP VƯỢT RÀO APPLE)
+# TAB 3: LUYỆN NÓI (ĐÃ FIX LỖI APPLE & NÚT DỪNG)
 # ==========================================
 with t_shadow:
     st.markdown("<h3>LUYỆN NÓI LIÊN TỤC</h3>", unsafe_allow_html=True)
     if not st.session_state.selected_ids:
-        st.warning("Hải hãy sang tab Quản Lý và chọn ít nhất 1 từ nhé!")
+        st.warning("Hãy sang tab Quản Lý và chọn ít nhất 1 từ nhé!")
     else:
         conn = sqlite3.connect('nihongo_web.db')
         ids_str = ','.join(map(str, st.session_state.selected_ids))
         shadow_words = conn.execute(f"SELECT * FROM vocab WHERE id IN ({ids_str})").fetchall()
         conn.close()
 
-        # Tạo danh sách âm thanh chuẩn bị sẵn cho Javascript
         playlist = []
         for w in shadow_words:
             tts = gTTS(text=w[1], lang='ja')
@@ -149,35 +143,53 @@ with t_shadow:
         
         js_playlist = json.dumps(playlist)
         
-        # Nhúng thẳng Javascript vào Web để xử lý luồng âm thanh
         html_player = f"""
         <div style="text-align: center; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); font-family: sans-serif;">
             <h1 id="p_kanji" style="font-size: 60px; color: #FF69B4; margin-bottom: 10px;">Sẵn sàng!</h1>
             <h3 id="p_hira" style="color: #34495e; margin: 5px 0;"></h3>
             <p id="p_mean" style="color: gray; font-style: italic; font-size: 18px; margin-bottom: 20px;"></p>
-            <button id="btn_play" onclick="startPlay()" style="background: #FF69B4; color: white; border: none; padding: 15px 40px; border-radius: 10px; font-size: 20px; font-weight: bold; cursor: pointer; width: 100%;">▶ CHẠM ĐỂ BẮT ĐẦU</button>
+            
+            <audio id="main_audio" style="display:none;"></audio>
+
+            <div style="display: flex; justify-content: center; gap: 15px; margin-top: 20px;">
+                <button id="btn_play" onclick="startPlay()" style="background: #27ae60; color: white; border: none; padding: 12px 30px; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; width: 100%;">▶ BẮT ĐẦU PHÁT</button>
+                <button id="btn_stop" onclick="stopPlay()" style="background: #e74c3c; color: white; border: none; padding: 12px 30px; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; width: 100%; display: none;">■ DỪNG LẠI</button>
+            </div>
         </div>
         
         <script>
             const playlist = {js_playlist};
             let idx = 0;
             let isPlaying = false;
+            let timerId = null;
+            const audioEl = document.getElementById('main_audio');
             
             function startPlay() {{
-                if(isPlaying) return;
+                if(playlist.length === 0 || isPlaying) return;
                 isPlaying = true;
                 document.getElementById('btn_play').style.display = 'none';
-                playNext();
+                document.getElementById('btn_stop').style.display = 'inline-block';
+                playWord();
+            }}
+
+            function stopPlay() {{
+                isPlaying = false;
+                audioEl.pause();
+                clearTimeout(timerId);
+                document.getElementById('btn_play').style.display = 'inline-block';
+                document.getElementById('btn_play').innerText = "▶ PHÁT TIẾP";
+                document.getElementById('btn_stop').style.display = 'none';
+                document.getElementById('p_kanji').innerText = "Đã tạm dừng";
             }}
             
-            function playNext() {{
+            function playWord() {{
+                if(!isPlaying) return;
                 if(idx >= playlist.length) {{
-                    document.getElementById('p_kanji').innerText = "Hoàn thành vòng lặp! 🌸";
+                    document.getElementById('p_kanji').innerText = "Hoàn thành! 🌸";
                     document.getElementById('p_hira').innerText = "";
                     document.getElementById('p_mean').innerText = "";
-                    document.getElementById('btn_play').style.display = 'inline-block';
-                    document.getElementById('btn_play').innerText = "Phát lại từ đầu";
-                    isPlaying = false;
+                    stopPlay();
+                    document.getElementById('btn_play').innerText = "▶ PHÁT LẠI TỪ ĐẦU";
                     idx = 0;
                     return;
                 }}
@@ -187,12 +199,27 @@ with t_shadow:
                 document.getElementById('p_hira').innerText = word.hira;
                 document.getElementById('p_mean').innerText = word.mean;
                 
-                let audio = new Audio("data:audio/mp3;base64," + word.audio);
-                audio.play().catch(e => console.log("Lỗi phát: ", e));
+                audioEl.src = "data:audio/mp3;base64," + word.audio;
+                audioEl.load();
+                let playPromise = audioEl.play();
                 
-                setTimeout(playNext, 4000); // 4 giây sang từ mới
-                idx++;
+                if (playPromise !== undefined) {{
+                    playPromise.catch(error => {{
+                        console.log("Audio bị chặn. Tự động chuyển từ sau 3s.");
+                        timerId = setTimeout(() => {{ idx++; playWord(); }}, 3000);
+                    }});
+                }}
             }}
+
+            // Sự kiện then chốt: Chờ đọc xong mới đếm thời gian nghỉ
+            audioEl.onended = function() {{
+                if(!isPlaying) return;
+                // Nghỉ 3.5 giây để Hải đọc theo (Shadowing)
+                timerId = setTimeout(() => {{
+                    idx++;
+                    playWord();
+                }}, 3500); 
+            }};
         </script>
         """
         components.html(html_player, height=350)
@@ -255,7 +282,6 @@ with t_quiz:
             q_word = st.session_state.quiz_word
             st.markdown(f"<div class='word-card'><h1 style='font-size: 60px;'>{q_word[1]}</h1></div>", unsafe_allow_html=True)
             
-            # Cung cấp thanh audio để Hải tự bấm nghe nếu iPhone chặn tự động phát
             render_audio(q_word[1], autoplay=True)
             
             st.write("Chọn đáp án đúng:")
