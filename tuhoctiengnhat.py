@@ -6,9 +6,11 @@ from gtts import gTTS
 import pykakasi
 from deep_translator import GoogleTranslator
 from io import BytesIO
-import base64 # Thư viện mới để xử lý âm thanh cho Web
+import base64
+import uuid
+import json
+import streamlit.components.v1 as components
 
-# Khởi tạo bộ chuyển đổi tiếng Nhật
 kks = pykakasi.kakasi()
 
 # --- CẤU HÌNH GIAO DIỆN ---
@@ -25,7 +27,6 @@ st.markdown("""
 
 st.markdown("<h1>✿ NIHONGO PINK MASTER WEB ✿</h1>", unsafe_allow_html=True)
 
-# --- DATABASE ---
 def init_db():
     conn = sqlite3.connect('nihongo_web.db')
     conn.execute('''CREATE TABLE IF NOT EXISTS vocab 
@@ -33,31 +34,33 @@ def init_db():
     conn.commit(); conn.close()
 init_db()
 
-# --- HÀM PHÁT ÂM CHỐNG LỖI CHO IPHONE ---
+# --- HÀM PHÁT ÂM CHỐNG LỖI TRÙNG LẶP CHO TRẮC NGHIỆM ---
 def render_audio(text, autoplay=False):
     tts = gTTS(text=text, lang='ja')
     fp = BytesIO()
     tts.write_to_fp(fp)
     b64 = base64.b64encode(fp.getvalue()).decode()
+    uid = str(uuid.uuid4()).replace("-", "") # Tạo ID độc nhất mỗi lần gọi
+    
     auto_str = "autoplay" if autoplay else ""
-    # Tạo trình phát HTML5 tùy chỉnh
     html = f"""
-        <audio controls {auto_str} style="width: 100%; height: 40px;">
+        <audio id="audio_{uid}" controls {auto_str} style="width: 100%; height: 45px; border-radius: 10px;">
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
     """
+    if autoplay:
+        # Ép trình duyệt phát bằng Javascript
+        html += f"""<script>document.getElementById("audio_{uid}").play().catch(e => console.log("iOS Autoplay chặn"));</script>"""
     st.markdown(html, unsafe_allow_html=True)
 
-# --- KHỞI TẠO BỘ NHỚ TRẠNG THÁI ---
+# --- BỘ NHỚ TRẠNG THÁI ---
 if 'selected_ids' not in st.session_state: st.session_state.selected_ids = []
-if 'shadow_idx' not in st.session_state: st.session_state.shadow_idx = 0
-if 'is_shadowing' not in st.session_state: st.session_state.is_shadowing = False
 if 'flash_word' not in st.session_state: st.session_state.flash_word = None
 if 'quiz_word' not in st.session_state: st.session_state.quiz_word = None
 if 'quiz_options' not in st.session_state: st.session_state.quiz_options = []
 if 'edit_id' not in st.session_state: st.session_state.edit_id = None
 
-# --- TẠO TABS ---
+# --- TABS ---
 t_add, t_manage, t_shadow, t_flash, t_quiz = st.tabs(["📝 Thêm", "📚 Quản Lý", "🗣 Luyện Nói", "🎴 Flashcard", "🎯 Trắc Nghiệm"])
 
 # ==========================================
@@ -66,7 +69,6 @@ t_add, t_manage, t_shadow, t_flash, t_quiz = st.tabs(["📝 Thêm", "📚 Quản
 with t_add:
     st.markdown("<h3>TRA CỨU VÀ THÊM TỪ</h3>", unsafe_allow_html=True)
     kj_input = st.text_input("Nhập Kanji (vd: 先生):", key="in_kj")
-    
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Tra cứu tự động ✧"):
@@ -79,7 +81,7 @@ with t_add:
     h_input = st.text_input("Hiragana:", value=st.session_state.get('temp_hira', ''))
     m_input = st.text_input("Nghĩa tiếng Việt:", value=st.session_state.get('temp_mean', ''))
     
-    if st.button("Lưu Vào Kho Dữ Liệu", use_container_width=True):
+    if st.button("Lưu Vào Kho", use_container_width=True):
         if kj_input and h_input and m_input:
             conn = sqlite3.connect('nihongo_web.db')
             conn.execute("INSERT INTO vocab (kanji, hiragana, meaning) VALUES (?, ?, ?)", (kj_input, h_input, m_input))
@@ -92,16 +94,15 @@ with t_add:
 # TAB 2: QUẢN LÝ
 # ==========================================
 with t_manage:
-    st.markdown("<h3>QUẢN LÝ TỪ VỰNG</h3>", unsafe_allow_html=True)
+    st.markdown("<h3>KHO TỪ VỰNG CỦA HẢI</h3>", unsafe_allow_html=True)
     conn = sqlite3.connect('nihongo_web.db')
     rows = conn.execute("SELECT * FROM vocab").fetchall()
     conn.close()
 
-    if not rows: st.info("Chưa có từ vựng nào. Hãy thêm ở tab bên cạnh nhé!")
+    if not rows: st.info("Hải hãy thêm từ mới ở tab bên cạnh nhé!")
     
     for r in rows:
         c1, c2, c3, c4, c5 = st.columns([0.5, 4, 1, 1, 1])
-        
         is_checked = c1.checkbox("", key=f"chk_{r[0]}", value=(r[0] in st.session_state.selected_ids))
         if is_checked and r[0] not in st.session_state.selected_ids: st.session_state.selected_ids.append(r[0])
         elif not is_checked and r[0] in st.session_state.selected_ids: st.session_state.selected_ids.remove(r[0])
@@ -125,42 +126,76 @@ with t_manage:
         st.divider()
 
 # ==========================================
-# TAB 3: LUYỆN NÓI
+# TAB 3: LUYỆN NÓI (GIẢI PHÁP VƯỢT RÀO APPLE)
 # ==========================================
 with t_shadow:
-    st.markdown("<h3>LUYỆN NÓI (SHADOWING)</h3>", unsafe_allow_html=True)
+    st.markdown("<h3>LUYỆN NÓI LIÊN TỤC</h3>", unsafe_allow_html=True)
     if not st.session_state.selected_ids:
-        st.warning("Hải hãy sang tab Quản Lý và tích chọn ít nhất 1 từ nhé!")
+        st.warning("Hải hãy sang tab Quản Lý và chọn ít nhất 1 từ nhé!")
     else:
         conn = sqlite3.connect('nihongo_web.db')
         ids_str = ','.join(map(str, st.session_state.selected_ids))
         shadow_words = conn.execute(f"SELECT * FROM vocab WHERE id IN ({ids_str})").fetchall()
         conn.close()
 
-        if st.button("▶ Bắt đầu / Dừng phát", use_container_width=True):
-            st.session_state.is_shadowing = not st.session_state.is_shadowing
-            st.session_state.shadow_idx = 0
-            st.rerun()
-
-        if st.session_state.is_shadowing:
-            idx = st.session_state.shadow_idx
-            if idx < len(shadow_words):
-                word = shadow_words[idx]
-                st.markdown(f"""
-                    <div class="word-card">
-                        <h1 style="font-size: 60px;">{word[1]}</h1>
-                        <h3>{word[2]}</h3>
-                        <p style="color: gray;">{word[3]}</p>
-                    </div>
-                """, unsafe_allow_html=True)
+        # Tạo danh sách âm thanh chuẩn bị sẵn cho Javascript
+        playlist = []
+        for w in shadow_words:
+            tts = gTTS(text=w[1], lang='ja')
+            fp = BytesIO()
+            tts.write_to_fp(fp)
+            b64 = base64.b64encode(fp.getvalue()).decode()
+            playlist.append({"kanji": w[1], "hira": w[2], "mean": w[3], "audio": b64})
+        
+        js_playlist = json.dumps(playlist)
+        
+        # Nhúng thẳng Javascript vào Web để xử lý luồng âm thanh
+        html_player = f"""
+        <div style="text-align: center; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); font-family: sans-serif;">
+            <h1 id="p_kanji" style="font-size: 60px; color: #FF69B4; margin-bottom: 10px;">Sẵn sàng!</h1>
+            <h3 id="p_hira" style="color: #34495e; margin: 5px 0;"></h3>
+            <p id="p_mean" style="color: gray; font-style: italic; font-size: 18px; margin-bottom: 20px;"></p>
+            <button id="btn_play" onclick="startPlay()" style="background: #FF69B4; color: white; border: none; padding: 15px 40px; border-radius: 10px; font-size: 20px; font-weight: bold; cursor: pointer; width: 100%;">▶ CHẠM ĐỂ BẮT ĐẦU</button>
+        </div>
+        
+        <script>
+            const playlist = {js_playlist};
+            let idx = 0;
+            let isPlaying = false;
+            
+            function startPlay() {{
+                if(isPlaying) return;
+                isPlaying = true;
+                document.getElementById('btn_play').style.display = 'none';
+                playNext();
+            }}
+            
+            function playNext() {{
+                if(idx >= playlist.length) {{
+                    document.getElementById('p_kanji').innerText = "Hoàn thành vòng lặp! 🌸";
+                    document.getElementById('p_hira').innerText = "";
+                    document.getElementById('p_mean').innerText = "";
+                    document.getElementById('btn_play').style.display = 'inline-block';
+                    document.getElementById('btn_play').innerText = "Phát lại từ đầu";
+                    isPlaying = false;
+                    idx = 0;
+                    return;
+                }}
                 
-                render_audio(word[1], autoplay=True)
-                time.sleep(4) 
-                st.session_state.shadow_idx += 1
-                st.rerun()
-            else:
-                st.session_state.is_shadowing = False
-                st.success("Đã hoàn thành vòng luyện nói!")
+                let word = playlist[idx];
+                document.getElementById('p_kanji').innerText = word.kanji;
+                document.getElementById('p_hira').innerText = word.hira;
+                document.getElementById('p_mean').innerText = word.mean;
+                
+                let audio = new Audio("data:audio/mp3;base64," + word.audio);
+                audio.play().catch(e => console.log("Lỗi phát: ", e));
+                
+                setTimeout(playNext, 4000); // 4 giây sang từ mới
+                idx++;
+            }}
+        </script>
+        """
+        components.html(html_player, height=350)
 
 # ==========================================
 # TAB 4: FLASHCARD
@@ -220,7 +255,7 @@ with t_quiz:
             q_word = st.session_state.quiz_word
             st.markdown(f"<div class='word-card'><h1 style='font-size: 60px;'>{q_word[1]}</h1></div>", unsafe_allow_html=True)
             
-            # Khung phát âm (Trên iPhone có thể ấn Play thủ công nếu bị chặn autoplay)
+            # Cung cấp thanh audio để Hải tự bấm nghe nếu iPhone chặn tự động phát
             render_audio(q_word[1], autoplay=True)
             
             st.write("Chọn đáp án đúng:")
